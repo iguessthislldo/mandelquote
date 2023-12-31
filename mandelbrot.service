@@ -1,0 +1,11 @@
+[Unit]
+Description=Mandelbrot
+After=multi-user.target
+
+[Service]
+Restart=always
+WorkingDirectory=/home/pi/mandelbrot
+ExecStart=bash mandelbrot.sh
+
+[Install]
+WantedBy=multi-user.target

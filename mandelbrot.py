@@ -10,7 +10,6 @@ import traceback
 from PIL import Image, ImageOps, ImageDraw, ImageShow
 
 file_output = True
-loop = False
 
 try:
     from inky.auto import auto as Inky
@@ -84,8 +83,11 @@ class Mandelbrot:
             print(f'{n}/{self.count}', self.window)
 
             start_gen = time.monotonic()
-            edges = []
+            last = i == self.count - 1
+            edges = None if last else []
             img = self.generate_mandelbrot_image(edges)
+            if edges is not None:
+                print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
@@ -98,19 +100,23 @@ class Mandelbrot:
             if total < self.min_interval:
                 sleep(self.min_interval - total)
 
-            center = random.choice(edges)
-            w = ((self.window[1] - self.window[0]) / 2) / self.zoom
-            h = ((self.window[3] - self.window[2]) / 2) / self.zoom
-            self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
-            self.max_iter += 10
+            if not last:
+                center = random.choice(edges)
+                w = ((self.window[1] - self.window[0]) / 2) / self.zoom
+                h = ((self.window[3] - self.window[2]) / 2) / self.zoom
+                self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
+                self.max_iter += 10
 
 
 if file_output:
+    loop = False
     out = FileOutput()
+    m = Mandelbrot(out)
 else:
+    loop = True
     out = Inky(ask_user=True, verbose=True)
-
-m = Mandelbrot(out)
+    m = Mandelbrot(out)
+    m.min_interval = 30
 
 print(f'{out.resolution[0]}x{out.resolution[1]}')
 while True:

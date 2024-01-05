@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 from time import sleep
 from argparse import ArgumentParser
 import random
@@ -48,6 +49,16 @@ class Mandelbrot:
         self.escape_radius = 100
         self.init_color = (0, 0, 0)
         self.max_iter_color = (255, 255, 255)
+        self.seed = random.randrange(sys.maxsize)
+
+    @property
+    def seed(self):
+        return self._seed
+
+    @seed.setter
+    def seed(self, value):
+        self._seed = value
+        self.rng = random.Random(self._seed)
 
     def mandelbrot(self, x, y):
         c = complex(x, y)
@@ -158,7 +169,7 @@ class Mandelbrot:
                 sleep(self.min_interval - total)
 
             if not last:
-                center = random.choice(edges)
+                center = self.rng.choice(edges)
                 w = ((self.window[1] - self.window[0]) / 2) / self.zoom
                 h = ((self.window[3] - self.window[2]) / 2) / self.zoom
                 self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
@@ -176,6 +187,7 @@ else:
     m.min_interval = 30
 
 print(f'{out.resolution[0]}x{out.resolution[1]}')
+print(f'seed: {m.seed}')
 while True:
     try:
         m.generate_seq()

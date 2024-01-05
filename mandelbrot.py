@@ -41,6 +41,7 @@ class Mandelbrot:
         self.zoom = 2
         self.sat_weight = 0.005
         self.count = 15
+        self.skip = 0
         self.min_interval = 0
         self.slice_height = 1
         self.smooth = True
@@ -118,10 +119,12 @@ class Mandelbrot:
         return (row_start, img if get_img else None, edges)
 
     def generate(self, resolution, get_img=None, edges=None):
+        h = resolution[1]
+        img = None
         if get_img:
             img = Image.new('RGB', resolution, (0, 0, 0))
-        h = resolution[1]
         get_edges = edges is not None
+
         with futures.ProcessPoolExecutor() as ex:
             # Break image up into slices that can be computed in parallel
             jobs = []
@@ -152,14 +155,15 @@ class Mandelbrot:
             start_gen = time.monotonic()
             last = i == self.count - 1
             edges = None if last else []
-            img = self.generate(out.resolution, get_img=True, edges=edges)
+            img = self.generate(out.resolution, get_img=n > self.skip, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
-            out.set_image(img)
-            out.show()
+            if img:
+                out.set_image(img)
+                out.show()
             end_show = time.monotonic()
             print(end_show - end_gen, 's to show')
 
@@ -183,6 +187,7 @@ else:
     loop = True
     out = Inky(ask_user=True, verbose=True)
     m.min_interval = 30
+    m.skip = 2
 
 print(f'{out.resolution[0]}x{out.resolution[1]}')
 print(f'seed: {m.seed}')

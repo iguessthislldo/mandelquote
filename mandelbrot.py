@@ -35,18 +35,17 @@ class FileOutput:
 
 
 class Mandelbrot:
-    def __init__(self, out):
-        self.out = out
+    def __init__(self):
         self.window = (-2, 1, -1, 1)
-        self.max_iter = 150
+        self.max_iter = 75
         self.zoom = 2
-        self.sat_weight = 0.0005
+        self.sat_weight = 0.005
         self.count = 15
         self.min_interval = 0
         self.slice_height = 1
         self.smooth = True
         self.p = 2
-        self.escape_radius = 100
+        self.escape_radius = 10
         self.init_color = (0, 0, 0)
         self.max_iter_color = (255, 255, 255)
         self.seed = random.randrange(sys.maxsize)
@@ -99,9 +98,9 @@ class Mandelbrot:
             c = self._color(n)
         return c
 
-    def generate_slice(self, row_start, h, get_img=False, get_edges=False):
+    def generate_slice(self, resolution, row_start, h, get_img=False, get_edges=False):
         edges = [] if get_edges else None
-        w = self.out.resolution[0]
+        w = resolution[0]
         draw = None
         if get_img:
             img = Image.new('RGB', (w, h), self.init_color)
@@ -110,7 +109,7 @@ class Mandelbrot:
         for col in range(0, w):
             for row in range(row_start, row_start + h):
                 x = re_start + (col / w) * (re_end - re_start)
-                y = im_start + (row / self.out.resolution[1]) * (im_end - im_start)
+                y = im_start + (row / resolution[1]) * (im_end - im_start)
                 n, n_float = self.mandelbrot(x, y)
                 if draw is not None:
                     draw.point((col, row - row_start), self.color(n, n_float))
@@ -118,10 +117,10 @@ class Mandelbrot:
                     edges.append((x, y))
         return (row_start, img if get_img else None, edges)
 
-    def generate(self, get_img=True, edges=None):
+    def generate(self, resolution, get_img=None, edges=None):
         if get_img:
-            img = Image.new('RGB', self.out.resolution, (0, 0, 0))
-            w, h = self.out.resolution
+            img = Image.new('RGB', resolution, (0, 0, 0))
+        h = resolution[1]
         get_edges = edges is not None
         with futures.ProcessPoolExecutor() as ex:
             # Break image up into slices that can be computed in parallel
@@ -129,7 +128,7 @@ class Mandelbrot:
             for i in range(0, h // self.slice_height):
                 row_start = i * self.slice_height
                 jobs.append(ex.submit(self.generate_slice,
-                    row_start, self.slice_height, get_img, get_edges))
+                    resolution, row_start, self.slice_height, get_img, get_edges))
             # If slices don't fit neatly, make an extra one for the remainder
             rem = h % self.slice_height
             if rem != 0:
@@ -145,7 +144,7 @@ class Mandelbrot:
                     img.paste(slice_img, (0, row_start))
         return img
 
-    def generate_seq(self):
+    def generate_seq(self, out):
         for i in range(0, self.count):
             n = i + 1
             print(f'{n}/{self.count}', self.window)
@@ -153,14 +152,14 @@ class Mandelbrot:
             start_gen = time.monotonic()
             last = i == self.count - 1
             edges = None if last else []
-            img = self.generate(True, edges)
+            img = self.generate(out.resolution, get_img=True, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
-            self.out.set_image(img)
-            self.out.show()
+            out.set_image(img)
+            out.show()
             end_show = time.monotonic()
             print(end_show - end_gen, 's to show')
 
@@ -176,21 +175,20 @@ class Mandelbrot:
                 self.max_iter = int(self.max_iter * 1.1)
 
 
+m = Mandelbrot()
 if file_output:
     loop = False
     out = FileOutput()
-    m = Mandelbrot(out)
 else:
     loop = True
     out = Inky(ask_user=True, verbose=True)
-    m = Mandelbrot(out)
     m.min_interval = 30
 
 print(f'{out.resolution[0]}x{out.resolution[1]}')
 print(f'seed: {m.seed}')
 while True:
     try:
-        m.generate_seq()
+        m.generate_seq(out)
     except Exception:
         if loop:
             traceback.print_exc()

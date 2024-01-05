@@ -7,14 +7,15 @@ import math
 import time
 import traceback
 import concurrent.futures as futures
+import colorsys
 
 from PIL import Image, ImageOps, ImageDraw, ImageShow
 
-file_output = True
-
 try:
     from inky.auto import auto as Inky
+    file_output = False
 except ImportError:
+    traceback.print_exc()
     file_output = True
 
 
@@ -36,49 +37,75 @@ class Mandelbrot:
     def __init__(self, out):
         self.out = out
         self.window = (-2, 1, -1, 1)
-        self.max_iter = 100
+        self.max_iter = 150
         self.zoom = 2
-        self.sat_avg = 3
+        self.sat_weight = 0.0005
         self.count = 15
         self.min_interval = 0
         self.slice_height = 1
+        self.smooth = True
+        self.p = 2
+        self.escape_radius = 100
+        self.init_color = (0, 0, 0)
+        self.max_iter_color = (255, 255, 255)
 
     def mandelbrot(self, x, y):
         c = complex(x, y)
         z = 0
         n = 0
-        while abs(z) <= 2 and n < self.max_iter:
-            z = z * z + c
+        while abs(z) <= self.escape_radius and n < self.max_iter:
+            z = z ** self.p + c
             n += 1
-        return n
+        n_float = n
+        if self.smooth and n < self.max_iter:
+            n_float =- math.log(math.log(abs(z), self.escape_radius), self.p)
+        return n, n_float
+
+    def _color(self, n_float):
+        # Make color more saturated the closer it is to an edge
+        ratio = n_float / self.max_iter
+        hue = ratio
+        if self.sat_weight is None:
+            sat = 1
+        else:
+            sat = (self.sat_weight ** ratio - 1) / (self.sat_weight - 1)
+        val = 1
+        return tuple([int(c * 255) for c in colorsys.hsv_to_rgb(hue, sat, val)])
+
+    @staticmethod
+    def interpolate_color(c1, c2, frac):
+        return tuple([int((c2[i] - c1[i]) * frac + c1[i]) for i in range(0, 3)])
+
+    def color(self, n, n_float):
+        if n == self.max_iter:
+            c = self.max_iter_color
+        elif self.smooth and n < self.max_iter:
+            n_int = math.floor(n)
+            c1 = self._color(n_int)
+            c2 = self._color(n_int + 1)
+            c = self.interpolate_color(c1, c2, n_float % 1)
+        else:
+            c = self._color(n)
+        return c
 
     def generate_slice(self, row_start, h, get_img=False, get_edges=False):
         edges = [] if get_edges else None
         w = self.out.resolution[0]
         draw = None
         if get_img:
-            img = Image.new('HSV', (w, h), (0, 0, 0))
+            img = Image.new('RGB', (w, h), self.init_color)
             draw = ImageDraw.Draw(img)
         re_start, re_end, im_start, im_end = self.window
         for col in range(0, w):
             for row in range(row_start, row_start + h):
                 x = re_start + (col / w) * (re_end - re_start)
                 y = im_start + (row / self.out.resolution[1]) * (im_end - im_start)
-                m = self.mandelbrot(x, y)
+                n, n_float = self.mandelbrot(x, y)
                 if draw is not None:
-                    if m == self.max_iter:
-                        # White looks better on eInk display
-                        hue = 0
-                        sat = 0
-                    else:
-                        # Make color more saturated the closer it is to an edge
-                        hue = int(m * 255 / self.max_iter)
-                        sat = int((hue + 255 * self.sat_avg) / (1 + self.sat_avg))
-                    val = 255
-                    draw.point((col, row - row_start), (hue, sat, val))
-                if get_edges and m == (self.max_iter - 1):
+                    draw.point((col, row - row_start), self.color(n, n_float))
+                if get_edges and n == (self.max_iter - 1):
                     edges.append((x, y))
-        return (row_start, img.convert('RGB') if get_img else None, edges)
+        return (row_start, img if get_img else None, edges)
 
     def generate(self, get_img=True, edges=None):
         if get_img:
@@ -135,7 +162,7 @@ class Mandelbrot:
                 w = ((self.window[1] - self.window[0]) / 2) / self.zoom
                 h = ((self.window[3] - self.window[2]) / 2) / self.zoom
                 self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
-                self.max_iter += 10
+                self.max_iter = int(self.max_iter * 1.1)
 
 
 if file_output:

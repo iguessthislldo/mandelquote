@@ -9,8 +9,9 @@ import time
 import traceback
 import concurrent.futures as futures
 import colorsys
+import textwrap
 
-from PIL import Image, ImageOps, ImageDraw, ImageShow
+from PIL import Image, ImageOps, ImageDraw, ImageShow, ImageFont
 
 try:
     from inky.auto import auto as Inky
@@ -40,25 +41,12 @@ class Mandelbrot:
         self.max_iter = 75
         self.zoom = 2
         self.sat_weight = 0.005
-        self.count = 15
-        self.skip = 0
-        self.min_interval = 0
         self.slice_height = 1
         self.smooth = True
         self.p = 2
         self.escape_radius = 10
         self.init_color = (0, 0, 0)
         self.max_iter_color = (255, 255, 255)
-        self.seed = random.randrange(sys.maxsize)
-
-    @property
-    def seed(self):
-        return self._seed
-
-    @seed.setter
-    def seed(self, value):
-        self._seed = value
-        self.rng = random.Random(self._seed)
 
     def mandelbrot(self, x, y):
         c = complex(x, y)
@@ -122,7 +110,7 @@ class Mandelbrot:
         h = resolution[1]
         img = None
         if get_img:
-            img = Image.new('RGB', resolution, (0, 0, 0))
+            img = Image.new('RGBA', resolution, (0, 0, 0))
         get_edges = edges is not None
 
         with futures.ProcessPoolExecutor() as ex:
@@ -147,21 +135,101 @@ class Mandelbrot:
                     img.paste(slice_img, (0, row_start))
         return img
 
-    def generate_seq(self, out):
+    def zoom_in(self, center):
+        w = ((self.window[1] - self.window[0]) / 2) / self.zoom
+        h = ((self.window[3] - self.window[2]) / 2) / self.zoom
+        self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
+        self.max_iter = int(self.max_iter * 1.1)
+
+
+class QuoteWriter:
+    def __init__(self, width):
+        self.quotes_path = 'quotes.txt'
+        self.margin = 20
+        self.box_margin = 10
+        self.box_color = '#bbbbbbbb'
+        self.font_path = 'monofur.ttf'
+        self.font_size = 24
+        self.fill = '#000000'
+        self.stroke_width = 2
+        self.stroke_fill = '#ffffff'
+
+        with open(self.quotes_path) as quotes_file:
+            self.quotes = [q.strip().split(' -- ') for q in quotes_file.readlines()]
+
+        self.font = ImageFont.truetype(self.font_path, size=self.font_size)
+
+        self.col_width = 1
+        line_size = self.font.getbbox('X' * (self.col_width + 1))
+        self.line_height = line_size[3]
+        while line_size[2] < (width - self.margin * 2):
+            line_size = self.font.getbbox('X' * (self.col_width + 1))
+            self.col_width += 1
+
+    def draw_text(self, draw, offset, text):
+        draw.text((self.margin, offset), text, font=self.font,
+            fill=self.fill, stroke_width=self.stroke_width, stroke_fill=self.stroke_fill)
+        return offset + self.line_height
+
+    def write(self, img, rng):
+        quote_text, quote_attr = rng.choice(self.quotes)
+        lines = textwrap.wrap(quote_text, width=self.col_width)
+
+        text_box = Image.new('RGBA', img.size, 0)
+        draw = ImageDraw.Draw(text_box)
+        draw.rectangle(
+            (
+                self.box_margin, self.box_margin,
+                img.width - self.box_margin, self.box_margin + self.line_height * (len(lines) + 2)
+            ),
+            fill=self.box_color,
+        )
+
+        offset = self.margin
+        for line in lines:
+            offset = self.draw_text(draw, offset, line)
+        self.draw_text(draw, offset, '-- ' + quote_attr)
+
+        return Image.alpha_composite(img, text_box)
+
+
+class Sequence:
+    def __init__(self):
+        self.count = 15
+        self.skip = 0
+        self.min_interval = 0
+        self.seed = random.randrange(sys.maxsize)
+
+        self.mandelbrot = Mandelbrot()
+
+    @property
+    def seed(self):
+        return self._seed
+
+    @seed.setter
+    def seed(self, value):
+        self._seed = value
+        self.rng = random.Random(self._seed)
+
+    def generate(self, out):
+        quotes = QuoteWriter(out.resolution[0])
+
         for i in range(0, self.count):
             n = i + 1
-            print(f'{n}/{self.count}', self.window)
+            print(f'{n}/{self.count}', self.mandelbrot.window)
 
             start_gen = time.monotonic()
             last = i == self.count - 1
             edges = None if last else []
-            img = self.generate(out.resolution, get_img=n > self.skip, edges=edges)
+            img = self.mandelbrot.generate(
+                out.resolution, get_img=n > self.skip, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
             if img:
+                img = quotes.write(img, self.rng)
                 out.set_image(img)
                 out.show()
             end_show = time.monotonic()
@@ -172,28 +240,24 @@ class Mandelbrot:
                 sleep(self.min_interval - total)
 
             if not last:
-                center = self.rng.choice(edges)
-                w = ((self.window[1] - self.window[0]) / 2) / self.zoom
-                h = ((self.window[3] - self.window[2]) / 2) / self.zoom
-                self.window = (center[0] - w, center[0] + w, center[1] - h, center[1] + h)
-                self.max_iter = int(self.max_iter * 1.1)
+                self.mandelbrot.zoom_in(self.rng.choice(edges))
 
 
-m = Mandelbrot()
+seq = Sequence()
 if file_output:
     loop = False
     out = FileOutput()
 else:
     loop = True
     out = Inky(ask_user=True, verbose=True)
-    m.min_interval = 30
-    m.skip = 2
+    seq.min_interval = 120
+    seq.skip = 2
 
 print(f'{out.resolution[0]}x{out.resolution[1]}')
-print(f'seed: {m.seed}')
+print(f'seed: {seq.seed}')
 while True:
     try:
-        m.generate_seq(out)
+        seq.generate(out)
     except Exception:
         if loop:
             traceback.print_exc()

@@ -1,0 +1,18 @@
+Software and cathedrals are much the same – first we build them, then we pray. -- Sam Redwine
+All problems in computer science can be solved by another level of indirection. -- David Wheeler
+C is quirky, flawed, and an enormous success. -- Dennis M. Ritchie.
+I invented the term 'Object-Oriented', and I can tell you I did not have C++ in mind. -- Alan Kay
+On two occasions I have been asked [by members of Parliament], 'Pray, Mr. Babbage, if you put into the machine wrong figures, will the right answers come out?' I am not able rightly to apprehend the kind of confusion of ideas that could provoke such a question. -- Charles Babbage
+A ship in port is safe, but that's not what ships are built for. -- Grace Hopper
+When I wrote this code, only God and I understood what I did. Now only God knows. -- Unknown
+You can prematurely optimize maintainability, flexibility, security, and robustness just like you can performance. -- John Carmack
+There are only two hard problems in distributed systems: 2. Exactly-once delivery 1. Guaranteed order of messages 2. Exactly-once delivery -- Mathias Verraes
+There are 2 hard problems in computer science: cache invalidation, naming things, and off-by-1 errors. -- Leon Bambrick
+There are so many variations on the “there are only two hard problems in computer programming...” joke that I’m starting to suspect that programming isn't actually very easy. -- Nat Pryce
+One of my most productive days was throwing away 1,000 lines of code. -- Ken Thompson
+A program that has not been tested does not work. -- Bjarne Stroustrup
+640K ought to be enough for anybody. -- Wrongly attributed to Bill Gates
+The Analytical Engine has no pretensions whatever to originate anything. It can do whatever we know how to order it to perform. -- Ada Lovelace
+Never trust a computer you can't throw out a window -- Steve Wozniak
+We build our computers the way we build our cities - over time, without a plan, on top of ruins. -- Ellen Ullman
+The most effective debugging tool is still careful thought, coupled with judiciously placed print statements. -- Brian Kernighan

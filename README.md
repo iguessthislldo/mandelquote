@@ -1,6 +1,6 @@
 # Mandelbrot and Quote Display
 
-Mandelbrot image generator for the [Inky Impression display](https://shop.pimoroni.com/products/inky-impression-5-7) and written to my own tastes.
+[Mandelbrot](https://en.wikipedia.org/wiki/Mandelbrot_set) image generator for the [Inky Impression display](https://shop.pimoroni.com/products/inky-impression-5-7) and written to my own tastes.
 Can be run without an Inky display, in which case it will generate a series of PNGs.
 
 ## Example Output

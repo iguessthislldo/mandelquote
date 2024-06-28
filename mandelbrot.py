@@ -141,7 +141,7 @@ class Mandelbrot:
             edges,
         )
 
-    def generate(self, resolution, get_img=None, edges=None):
+    def generate(self, resolution, get_img=False, edges=None):
         w, h = resolution
         img = None
         if get_img:
@@ -176,14 +176,15 @@ class Mandelbrot:
                     slices.append((row_start, slice_height, int_data, float_data))
 
         # Color and copy slices into the result image
-        draw = ImageDraw.Draw(img)
-        for row_start, slice_height, int_data, float_data in slices:
-            for col in range(0, w):
-                for row in range(row_start, row_start + slice_height):
-                    index = (row - row_start) * w + col
-                    n = int_data[index]
-                    n_float = float_data[index]
-                    draw.point((col, row), self.color(min_n, n, n_float))
+        if get_img:
+            draw = ImageDraw.Draw(img)
+            for row_start, slice_height, int_data, float_data in slices:
+                for col in range(0, w):
+                    for row in range(row_start, row_start + slice_height):
+                        index = (row - row_start) * w + col
+                        n = int_data[index]
+                        n_float = float_data[index]
+                        draw.point((col, row), self.color(min_n, n, n_float))
 
         return img
 
@@ -269,28 +270,30 @@ class Sequence:
 
         for i in range(0, self.count):
             n = i + 1
-            print(f'{n}/{self.count}', self.mandelbrot.window)
+            get_img = n > self.skip
+            print(f'{n}/{self.count} get_img: {get_img}', self.mandelbrot.window)
 
             start_gen = time.monotonic()
             last = i == self.count - 1
             edges = None if last else []
             img = self.mandelbrot.generate(
-                self.out.resolution, get_img=n > self.skip, edges=edges)
+                self.out.resolution, get_img=get_img, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
-            if img:
+            if img and get_img:
                 img = self.quotes.write(img, self.rng)
                 self.out.set_image(img)
                 self.out.show()
-            end_show = time.monotonic()
-            print(end_show - end_gen, 's to show')
 
-            total = end_show - start_gen
-            if total < self.min_interval:
-                sleep(self.min_interval - total)
+                end_show = time.monotonic()
+                print(end_show - end_gen, 's to show')
+
+                total = end_show - start_gen
+                if total < self.min_interval:
+                    sleep(self.min_interval - total)
 
             if not last:
                 self.mandelbrot.zoom_in(self.rng.choice(edges))
@@ -299,6 +302,7 @@ class Sequence:
 if file_output:
     loop = False
     seq = Sequence(FileOutput())
+    seq.skip = 1
 else:
     loop = True
     seq = Sequence(Inky(ask_user=True, verbose=True))

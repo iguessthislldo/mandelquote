@@ -10,6 +10,7 @@ import traceback
 import concurrent.futures as futures
 import colorsys
 import textwrap
+import array
 
 from PIL import Image, ImageOps, ImageDraw, ImageShow, ImageFont
 
@@ -40,9 +41,12 @@ class Mandelbrot:
         self.window = (-2, 1, -1, 1)
         self.max_iter = 75
         self.zoom = 2
-        self.sat_weight = 0.005
-        self.slice_height = 1
+        # Must be <1 or None, smaller means more saturated, None disables desaturation
+        self.sat_weight = 0.0005
+        self.slice_height = 100
         self.smooth = True
+        # Color range is evaluated separately for each zoom
+        self.dynamic_color = True
         self.p = 2
         self.escape_radius = 10
         self.init_color = (0, 0, 0)
@@ -60,9 +64,9 @@ class Mandelbrot:
             n_float =- math.log(math.log(abs(z), self.escape_radius), self.p)
         return n, n_float
 
-    def _color(self, n_float):
+    def _color(self, min_n, n_float):
         # Make color more saturated the closer it is to an edge
-        ratio = n_float / self.max_iter
+        ratio = n_float / (self.max_iter - min_n)
         hue = ratio
         if self.sat_weight is None:
             sat = 1
@@ -75,39 +79,43 @@ class Mandelbrot:
     def interpolate_color(c1, c2, frac):
         return tuple([int((c2[i] - c1[i]) * frac + c1[i]) for i in range(0, 3)])
 
-    def color(self, n, n_float):
+    def color(self, min_n, n, n_float):
         if n == self.max_iter:
             c = self.max_iter_color
         elif self.smooth and n < self.max_iter:
-            n_int = math.floor(n)
-            c1 = self._color(n_int)
-            c2 = self._color(n_int + 1)
+            n_int = math.floor(n - min_n)
+            c1 = self._color(min_n, n_int)
+            c2 = self._color(min_n, n_int + 1)
             c = self.interpolate_color(c1, c2, n_float % 1)
         else:
-            c = self._color(n)
+            c = self._color(min_n, n)
         return c
 
-    def generate_slice(self, resolution, row_start, h, get_img=False, get_edges=False):
+    def generate_slice(self, resolution, row_start, h, get_data=False, get_edges=False):
         edges = [] if get_edges else None
         w = resolution[0]
-        draw = None
-        if get_img:
-            img = Image.new('RGB', (w, h), self.init_color)
-            draw = ImageDraw.Draw(img)
+        int_data = None
+        float_data = None
+        if get_data:
+            init = [0] * (w * h)
+            int_data = array.array('I', init)
+            float_data = array.array('f', init)
         re_start, re_end, im_start, im_end = self.window
         for col in range(0, w):
             for row in range(row_start, row_start + h):
                 x = re_start + (col / w) * (re_end - re_start)
                 y = im_start + (row / resolution[1]) * (im_end - im_start)
                 n, n_float = self.mandelbrot(x, y)
-                if draw is not None:
-                    draw.point((col, row - row_start), self.color(n, n_float))
+                if get_data:
+                    index = (row - row_start) * w + col
+                    int_data[index] = n
+                    float_data[index] = n_float
                 if get_edges and n == (self.max_iter - 1):
                     edges.append((x, y))
-        return (row_start, img if get_img else None, edges)
+        return (row_start, int_data if get_data else None, float_data if get_data else None, edges)
 
     def generate(self, resolution, get_img=None, edges=None):
-        h = resolution[1]
+        w, h = resolution
         img = None
         if get_img:
             img = Image.new('RGBA', resolution, (0, 0, 0))
@@ -126,13 +134,32 @@ class Mandelbrot:
                 jobs.append(ex.submit(self.generate_slice,
                     row_start + self.slice_height, rem, get_img, get_edges))
 
-            # As jobs finish, copy slices into the result image
+            # Gather slices as jobs finish
+            min_n = sys.maxsize if self.dynamic_color else 0
+            slices = []
             for job in futures.as_completed(jobs):
-                row_start, slice_img, slice_edges = job.result()
+                row_start, int_data, float_data, slice_edges = job.result()
                 if get_edges:
                     edges.extend(slice_edges)
                 if get_img:
-                    img.paste(slice_img, (0, row_start))
+                    if self.dynamic_color:
+                        for n in int_data:
+                            min_n = min(n, min_n)
+                    slices.append((row_start, int_data, float_data))
+
+            # Color and copy slices into the result image
+            for row_start, int_data, float_data in slices:
+                slice_img = Image.new('RGB', (w, self.slice_height), self.init_color)
+                draw = ImageDraw.Draw(slice_img)
+                for col in range(0, w):
+                    for row in range(row_start, row_start + self.slice_height):
+                        r = row - row_start
+                        index = r * w + col
+                        n = int_data[index]
+                        n_float = float_data[index]
+                        draw.point((col, r), self.color(min_n, n, n_float))
+                img.paste(slice_img, (0, row_start))
+
         return img
 
     def zoom_in(self, center):

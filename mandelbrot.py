@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
+import os
 from time import sleep
 from argparse import ArgumentParser
 import random
@@ -20,6 +21,26 @@ try:
 except ImportError:
     traceback.print_exc()
     file_output = True
+
+
+try:
+    import RPi.GPIO as GPIO
+
+    buttons = [5, 6, 16, 24]
+    labels = ['A', 'B', 'C', 'D']
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(buttons, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    def handle_button(pin):
+        label = labels[buttons.index(pin)]
+        print("Button press detected on pin: {} label: {}".format(pin, label))
+        if label == 'A':
+            os.system('shutdown now')
+
+    for pin in buttons:
+        GPIO.add_event_detect(pin, GPIO.FALLING, handle_button, bouncetime=250)
+except ImportError:
+    traceback.print_exc()
 
 
 class FileOutput:
@@ -43,7 +64,7 @@ class Mandelbrot:
         self.zoom = 2
         # Must be <1 or None, smaller means more saturated, None disables desaturation
         self.sat_weight = 0.0005
-        self.slice_height = 100
+        self.slice_height = 101
         self.smooth = True
         # Color range is evaluated separately for each zoom
         self.dynamic_color = True
@@ -91,18 +112,18 @@ class Mandelbrot:
             c = self._color(min_n, n)
         return c
 
-    def generate_slice(self, resolution, row_start, h, get_data=False, get_edges=False):
+    def generate_slice(self, resolution, row_start, slice_height, get_data=False, get_edges=False):
         edges = [] if get_edges else None
         w = resolution[0]
         int_data = None
         float_data = None
         if get_data:
-            init = [0] * (w * h)
+            init = [0] * (w * slice_height)
             int_data = array.array('I', init)
             float_data = array.array('f', init)
         re_start, re_end, im_start, im_end = self.window
         for col in range(0, w):
-            for row in range(row_start, row_start + h):
+            for row in range(row_start, row_start + slice_height):
                 x = re_start + (col / w) * (re_end - re_start)
                 y = im_start + (row / resolution[1]) * (im_end - im_start)
                 n, n_float = self.mandelbrot(x, y)
@@ -112,7 +133,13 @@ class Mandelbrot:
                     float_data[index] = n_float
                 if get_edges and n == (self.max_iter - 1):
                     edges.append((x, y))
-        return (row_start, int_data if get_data else None, float_data if get_data else None, edges)
+        return (
+            row_start,
+            slice_height,
+            int_data if get_data else None,
+            float_data if get_data else None,
+            edges,
+        )
 
     def generate(self, resolution, get_img=None, edges=None):
         w, h = resolution
@@ -124,6 +151,7 @@ class Mandelbrot:
         with futures.ProcessPoolExecutor() as ex:
             # Break image up into slices that can be computed in parallel
             jobs = []
+            print('Images is made of', h / self.slice_height, 'slices')
             for i in range(0, h // self.slice_height):
                 row_start = i * self.slice_height
                 jobs.append(ex.submit(self.generate_slice,
@@ -132,33 +160,30 @@ class Mandelbrot:
             rem = h % self.slice_height
             if rem != 0:
                 jobs.append(ex.submit(self.generate_slice,
-                    row_start + self.slice_height, rem, get_img, get_edges))
+                    resolution, row_start + self.slice_height, rem, get_img, get_edges))
 
             # Gather slices as jobs finish
             min_n = sys.maxsize if self.dynamic_color else 0
             slices = []
             for job in futures.as_completed(jobs):
-                row_start, int_data, float_data, slice_edges = job.result()
+                row_start, slice_height, int_data, float_data, slice_edges = job.result()
                 if get_edges:
                     edges.extend(slice_edges)
                 if get_img:
                     if self.dynamic_color:
                         for n in int_data:
                             min_n = min(n, min_n)
-                    slices.append((row_start, int_data, float_data))
+                    slices.append((row_start, slice_height, int_data, float_data))
 
-            # Color and copy slices into the result image
-            for row_start, int_data, float_data in slices:
-                slice_img = Image.new('RGB', (w, self.slice_height), self.init_color)
-                draw = ImageDraw.Draw(slice_img)
-                for col in range(0, w):
-                    for row in range(row_start, row_start + self.slice_height):
-                        r = row - row_start
-                        index = r * w + col
-                        n = int_data[index]
-                        n_float = float_data[index]
-                        draw.point((col, r), self.color(min_n, n, n_float))
-                img.paste(slice_img, (0, row_start))
+        # Color and copy slices into the result image
+        draw = ImageDraw.Draw(img)
+        for row_start, slice_height, int_data, float_data in slices:
+            for col in range(0, w):
+                for row in range(row_start, row_start + slice_height):
+                    index = (row - row_start) * w + col
+                    n = int_data[index]
+                    n_float = float_data[index]
+                    draw.point((col, row), self.color(min_n, n, n_float))
 
         return img
 
@@ -221,13 +246,15 @@ class QuoteWriter:
 
 
 class Sequence:
-    def __init__(self):
+    def __init__(self, out):
         self.count = 15
         self.skip = 0
         self.min_interval = 0
         self.seed = random.randrange(sys.maxsize)
 
+        self.out = out
         self.mandelbrot = Mandelbrot()
+        self.quotes = QuoteWriter(out.resolution[0])
 
     @property
     def seed(self):
@@ -238,8 +265,7 @@ class Sequence:
         self._seed = value
         self.rng = random.Random(self._seed)
 
-    def generate(self, out):
-        quotes = QuoteWriter(out.resolution[0])
+    def generate(self):
 
         for i in range(0, self.count):
             n = i + 1
@@ -249,16 +275,16 @@ class Sequence:
             last = i == self.count - 1
             edges = None if last else []
             img = self.mandelbrot.generate(
-                out.resolution, get_img=n > self.skip, edges=edges)
+                self.out.resolution, get_img=n > self.skip, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
             end_gen = time.monotonic()
             print(end_gen - start_gen, 's to generate')
 
             if img:
-                img = quotes.write(img, self.rng)
-                out.set_image(img)
-                out.show()
+                img = self.quotes.write(img, self.rng)
+                self.out.set_image(img)
+                self.out.show()
             end_show = time.monotonic()
             print(end_show - end_gen, 's to show')
 
@@ -270,21 +296,20 @@ class Sequence:
                 self.mandelbrot.zoom_in(self.rng.choice(edges))
 
 
-seq = Sequence()
 if file_output:
     loop = False
-    out = FileOutput()
+    seq = Sequence(FileOutput())
 else:
     loop = True
-    out = Inky(ask_user=True, verbose=True)
+    seq = Sequence(Inky(ask_user=True, verbose=True))
     seq.min_interval = 120
     seq.skip = 2
 
-print(f'{out.resolution[0]}x{out.resolution[1]}')
+print(f'{seq.out.resolution[0]}x{seq.out.resolution[1]}')
 print(f'seed: {seq.seed}')
 while True:
     try:
-        seq.generate(out)
+        seq.generate()
     except Exception:
         if loop:
             traceback.print_exc()

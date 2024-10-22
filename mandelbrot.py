@@ -254,7 +254,6 @@ class Sequence:
         self.seed = random.randrange(sys.maxsize)
 
         self.out = out
-        self.mandelbrot = Mandelbrot()
         self.quotes = QuoteWriter(out.resolution[0])
 
     @property
@@ -267,16 +266,16 @@ class Sequence:
         self.rng = random.Random(self._seed)
 
     def generate(self):
-
+        mandelbrot = Mandelbrot()
         for i in range(0, self.count):
             n = i + 1
             get_img = n > self.skip
-            print(f'{n}/{self.count} get_img: {get_img}', self.mandelbrot.window)
+            print(f'{n}/{self.count} get_img: {get_img}', mandelbrot.window)
 
             start_gen = time.monotonic()
             last = i == self.count - 1
             edges = None if last else []
-            img = self.mandelbrot.generate(
+            img = mandelbrot.generate(
                 self.out.resolution, get_img=get_img, edges=edges)
             if edges is not None:
                 print(len(edges), 'edges that can be used')
@@ -296,7 +295,7 @@ class Sequence:
                     sleep(self.min_interval - total)
 
             if not last:
-                self.mandelbrot.zoom_in(self.rng.choice(edges))
+                mandelbrot.zoom_in(self.rng.choice(edges))
 
 
 if file_output:
@@ -306,7 +305,7 @@ if file_output:
 else:
     loop = True
     seq = Sequence(Inky(ask_user=True, verbose=True))
-    seq.min_interval = 120
+    seq.min_interval = 60 * 10
     seq.skip = 2
 
 print(f'{seq.out.resolution[0]}x{seq.out.resolution[1]}')

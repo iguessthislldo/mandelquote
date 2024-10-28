@@ -1,2 +1,4 @@
 /.venv
 /*.png
+/build
+/*.egg-info

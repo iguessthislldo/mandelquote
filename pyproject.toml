@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mandelbrot_native"
+version = "0.1"
+
+[tool.setuptools]
+packages = []
+ext-modules = [
+  {name = "mandelbrot_native", sources = ["mandelbrot_native.c"]}
+]

@@ -16,6 +16,14 @@ import array
 from PIL import Image, ImageOps, ImageDraw, ImageShow, ImageFont
 
 
+use_mandelbrot_native_impl = False
+try:
+    from mandelbrot_native import mandelbrot_native
+    use_mandelbrot_native_impl = True
+except ImportError:
+    pass
+
+
 try:
     from inky.auto import auto as Inky
     file_output = False
@@ -173,9 +181,20 @@ class Mandelbrot:
                     edges.append((x, y))
         return (int_data, float_data, edges)
 
+    def mandelbrot_native_impl(self, resolution, row_start, slice_height,
+            get_int_data, get_float_data, get_edges):
+        w, h = resolution
+        re_start, re_end, im_start, im_end = self.window
+        return mandelbrot_native(w, h, row_start, slice_height,
+            re_start, re_end, im_start, im_end,
+            self.escape_radius, self.max_iter, self.p,
+            get_int_data, get_float_data, get_edges)
+
     def generate_slice(self, resolution, row_start, slice_height,
             get_int_data, get_float_data, get_edges):
-        int_data, float_data, edges = self.mandelbrot_python_impl(
+        impl = self.mandelbrot_native_impl if use_mandelbrot_native_impl \
+            else self.mandelbrot_python_impl
+        int_data, float_data, edges = impl(
             resolution, row_start, slice_height,
             get_int_data, get_float_data, get_edges)
         return (row_start, slice_height, int_data, float_data, edges)
@@ -450,7 +469,11 @@ if __name__ == '__main__':
     arg_parser.add_argument('--no-smooth', action='store_false', dest='smooth')
     arg_parser.add_argument('--no-sat', action='store_false', dest='sat')
     arg_parser.add_argument('--no-dynamic-color', action='store_false', dest='dynamic_color')
+    arg_parser.add_argument('--force-python-impl', action='store_true')
     args = arg_parser.parse_args()
+
+    if args.force_python_impl:
+        use_mandelbrot_native_impl = False
 
     if file_output:
         out = FileOutput()
@@ -472,5 +495,9 @@ if __name__ == '__main__':
 
     print(f'{seq.resolution[0]}x{seq.resolution[1]}')
     print(f'seed: {seq.seed}')
+    if use_mandelbrot_native_impl:
+        print('Using Native Implementation')
+    else:
+        print('Using Python Implementation')
 
     seq.generate_and_show(loop)

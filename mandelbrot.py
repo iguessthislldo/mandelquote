@@ -12,9 +12,9 @@ import concurrent.futures as futures
 import colorsys
 import textwrap
 import array
+from pathlib import Path
 
 from PIL import Image, ImageOps, ImageDraw, ImageShow, ImageFont
-
 
 use_mandelbrot_native_impl = False
 try:
@@ -24,15 +24,7 @@ except ImportError:
     pass
 
 
-try:
-    from inky.auto import auto as Inky
-    file_output = False
-except ImportError:
-    traceback.print_exc()
-    file_output = True
-
-
-try:
+def setup_pi_buttons():
     import RPi.GPIO as GPIO
 
     buttons = [5, 6, 16, 24]
@@ -48,8 +40,6 @@ try:
 
     for pin in buttons:
         GPIO.add_event_detect(pin, GPIO.FALLING, handle_button, bouncetime=250)
-except ImportError:
-    traceback.print_exc()
 
 
 class FileOutput:
@@ -152,6 +142,14 @@ class Mandelbrot:
             c = self._color(min_n, n)
         return c
 
+    def draw_slice(self, draw, w, row_start, slice_height, int_data, float_data, min_n):
+        for col in range(0, w):
+            for row in range(row_start, row_start + slice_height):
+                index = (row - row_start) * w + col
+                n = int_data[index]
+                n_float = float_data[index]
+                draw.point((col, row), self.color(min_n, n, n_float))
+
     def mandelbrot_python_impl(self, resolution, row_start, slice_height,
             get_int_data, get_float_data, get_edges):
         edges = [] if get_edges else None
@@ -197,13 +195,17 @@ class Mandelbrot:
         int_data, float_data, edges = impl(
             resolution, row_start, slice_height,
             get_int_data, get_float_data, get_edges)
+        if get_int_data and not get_float_data:
+            float_data = int_data
         return (row_start, slice_height, int_data, float_data, edges)
 
     def generate(self, log, resolution, get_img=False, edges=None):
         w, h = resolution
         img = None
+        draw = None
         if get_img:
             img = Image.new('RGBA', resolution, (0, 0, 0))
+            draw = ImageDraw.Draw(img)
         get_edges = edges is not None
 
         log.push_time('generate and join slices')
@@ -241,7 +243,13 @@ class Mandelbrot:
                     if self.dynamic_color:
                         for n in int_data:
                             min_n = min(n, min_n)
-                    slices.append((row_start, slice_height, int_data, float_data))
+                        slices.append((row_start, slice_height, int_data, float_data))
+                    else:
+                        # Without dynamic color we can just add the slice to
+                        # the image right now because we don't need to know the
+                        # min value of int_data.
+                        self.draw_slice(
+                            draw, w, row_start, slice_height, int_data, float_data, min_n)
         log.pop_time()
 
         if get_edges:
@@ -251,16 +259,10 @@ class Mandelbrot:
                 raise EdgeError(msg)
 
         # Color and copy slices into the result image
-        if get_img:
-            log.push_time('color')
-            draw = ImageDraw.Draw(img)
+        if get_img and self.dynamic_color:
+            log.push_time('dynamic color')
             for row_start, slice_height, int_data, float_data in slices:
-                for col in range(0, w):
-                    for row in range(row_start, row_start + slice_height):
-                        index = (row - row_start) * w + col
-                        n = int_data[index]
-                        n_float = float_data[index]
-                        draw.point((col, row), self.color(min_n, n, n_float))
+                self.draw_slice(draw, w, row_start, slice_height, int_data, float_data, min_n)
             log.pop_time()
 
         return img
@@ -273,12 +275,12 @@ class Mandelbrot:
 
 
 class TextWriter:
-    def __init__(self, width, font_size):
+    def __init__(self, data_path, width, font_size):
         self.box_margin = 10
         self.text_margin = 10
         self.abs_text_margin = self.box_margin + self.text_margin
         self.box_color = '#bbbbbbbb'
-        self.font_path = 'monofur.ttf'
+        self.font_path = data_path / 'monofur.ttf'
         self.font_size = 24
         self.fill = '#000000'
         self.stroke_width = 2
@@ -328,10 +330,10 @@ class TextWriter:
 
 
 class QuoteWriter(TextWriter):
-    def __init__(self, width):
-        super().__init__(width, font_size=24)
-        self.quotes_path = 'quotes.txt'
-        with open(self.quotes_path) as quotes_file:
+    def __init__(self, data_path, width):
+        super().__init__(data_path, width, font_size=24)
+        self.quotes_path = data_path / 'quotes.txt'
+        with self.quotes_path.open() as quotes_file:
             self.quotes = [q.strip().split(' -- ') for q in quotes_file.readlines()]
 
     def write(self, img, rng):
@@ -345,8 +347,8 @@ class QuoteWriter(TextWriter):
 
 
 class InfoWriter(TextWriter):
-    def __init__(self, width):
-        super().__init__(width, font_size=12)
+    def __init__(self, data_path, width):
+        super().__init__(data_path, width, font_size=12)
 
     def write(self, img, *args):
         lines = self.wrap_text(*args)
@@ -358,8 +360,9 @@ class InfoWriter(TextWriter):
 
 
 class Sequence:
-    def __init__(self, resolution, skip_resolution, out, count, skip, min_interval, seed, text,
-            workers, p, smooth, sat, dynamic_color):
+    def __init__(self, data_path, resolution, skip_resolution, out, count, skip, min_interval,
+            seed, text, workers, p, smooth, sat, dynamic_color):
+        self.data_path = data_path
         self.resolution = resolution
         self.skip_resolution = skip_resolution
         self.count = skip + count
@@ -372,12 +375,13 @@ class Sequence:
         self.smooth = smooth
         self.sat = sat
         self.dynamic_color = dynamic_color
+        self.img_dir = data_path / 'img'
 
         self.out = out
         width = resolution[0]
         if text:
-            self.quotes = QuoteWriter(width)
-            self.info = InfoWriter(width)
+            self.quotes = QuoteWriter(data_path, width)
+            self.info = InfoWriter(data_path, width)
 
     @property
     def seed(self):
@@ -387,6 +391,16 @@ class Sequence:
     def seed(self, value):
         self._seed = value
         self.rng = random.Random(self._seed)
+
+    def sleep_min(self, log, interval):
+        if interval < self.min_interval:
+            sleep_for = self.min_interval - interval
+            log.print('Sleeping for', sleep_for, 's')
+            sleep(sleep_for)
+
+    def show_img(self, img):
+        self.out.set_image(img)
+        self.out.show()
 
     def _generate_and_show(self, log):
         mandelbrot = Mandelbrot(self.workers, self.p, self.smooth, self.sat, self.dynamic_color)
@@ -422,20 +436,39 @@ class Sequence:
                 log.push_time('show')
                 if self.text:
                     img = self.quotes.write(img, self.rng)
-                self.out.set_image(img)
-                self.out.show()
+                    img = self.info.write(img, f'p={self.p}')
+                self.show_img(img)
                 log.pop_time()
 
             interval = log.pop_time()
             log.pop_level()
 
-            if interval < self.min_interval:
-                sleep_for = self.min_interval - interval
-                log.print('Sleeping for', sleep_for, 's')
-                sleep(sleep_for)
+            self.sleep_min(log, interval)
 
             if not last:
                 mandelbrot.zoom_in(self.rng.choice(edges))
+
+    def show_image_file(self, log):
+        if self.img_dir.is_dir():
+            log.push_time('show image file')
+            img_paths = list(self.img_dir.iterdir())
+            success = False
+            while not success and img_paths:
+                img_path = self.rng.choice(img_paths)
+                log.print(img_path)
+                try:
+                    with Image.open(img_path) as orig_img:
+                        img = ImageOps.fit(orig_img, self.out.resolution)
+                        if self.text:
+                            img = self.info.write(img, img_path.name)
+                        self.show_img(img)
+                    success = True
+                except:
+                    traceback.print_exc()
+                    img_paths.remove(img_path)
+            interval = log.pop_time()
+            if success:
+                self.sleep_min(log, interval)
 
     def generate_and_show(self, loop):
         while True:
@@ -449,6 +482,7 @@ class Sequence:
                     raise
             if not loop:
                 break
+            self.show_image_file(log)
 
 
 def parse_size(s):
@@ -470,28 +504,38 @@ if __name__ == '__main__':
     arg_parser.add_argument('--no-sat', action='store_false', dest='sat')
     arg_parser.add_argument('--no-dynamic-color', action='store_false', dest='dynamic_color')
     arg_parser.add_argument('--force-python-impl', action='store_true')
+    arg_parser.add_argument('--inky', action='store_true')
+    arg_parser.add_argument('--loop', action='store_true', default=False)
+    arg_parser.add_argument('--data', type=Path, default=Path(__file__).parent)
     args = arg_parser.parse_args()
 
     if args.force_python_impl:
         use_mandelbrot_native_impl = False
 
-    if file_output:
-        out = FileOutput()
-        skip_default = 1
-        min_interval_default = 0
-        loop = False
-    else:
+    if args.inky:
+        from inky.auto import auto as Inky
+
         out = Inky(ask_user=True, verbose=True)
-        skip_default = 2
+        skip_default = 3
         min_interval_default = 60 * 10
-        loop = True
+
+        try:
+            setup_pi_buttons()
+        except Exception:
+            traceback.print_exc()
+    else:
+        out = FileOutput()
+        skip_default = 0
+        min_interval_default = 0
     resolution = args.size or out.resolution
-    skip_resolution = args.skip_size or resolution
+    min_skip_res = (50, 30)
+    skip_resolution = args.skip_size or \
+        [max(min_skip_res[i], n // 10) for i, n in enumerate(resolution)]
 
     skip = skip_default if args.skip is None else args.skip
     min_interval = min_interval_default if args.min_interval is None else args.min_interval
-    seq = Sequence(resolution, skip_resolution, out, args.count, skip, min_interval, args.seed,
-        args.text, args.workers, args.p, args.smooth, args.sat, args.dynamic_color)
+    seq = Sequence(args.data, resolution, skip_resolution, out, args.count, skip, min_interval,
+        args.seed, args.text, args.workers, args.p, args.smooth, args.sat, args.dynamic_color)
 
     print(f'{seq.resolution[0]}x{seq.resolution[1]}')
     print(f'seed: {seq.seed}')
@@ -500,4 +544,4 @@ if __name__ == '__main__':
     else:
         print('Using Python Implementation')
 
-    seq.generate_and_show(loop)
+    seq.generate_and_show(args.loop)

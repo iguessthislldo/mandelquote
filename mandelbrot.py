@@ -84,6 +84,9 @@ class EdgeError(Exception):
     pass
 
 
+image_mode = 'RGBA'
+
+
 class Mandelbrot:
     def __init__(self, workers, p=2, smooth=True, sat=True, dynamic_color=True):
         self.workers = workers
@@ -204,7 +207,7 @@ class Mandelbrot:
         img = None
         draw = None
         if get_img:
-            img = Image.new('RGBA', resolution, (0, 0, 0))
+            img = Image.new(image_mode, resolution, (0, 0, 0))
             draw = ImageDraw.Draw(img)
         get_edges = edges is not None
 
@@ -443,7 +446,8 @@ class Sequence:
             interval = log.pop_time()
             log.pop_level()
 
-            self.sleep_min(log, interval)
+            if get_img:
+                self.sleep_min(log, interval)
 
             if not last:
                 mandelbrot.zoom_in(self.rng.choice(edges))
@@ -456,14 +460,35 @@ class Sequence:
             while not success and img_paths:
                 img_path = self.rng.choice(img_paths)
                 log.print(img_path)
+
                 try:
+                    parts = img_path.name.split('.')
+                    method = 'pad'
+                    if len(parts) >= 3:
+                        show_end = -1
+                        if parts[-2] in {'pad', 'fit'}:
+                            method = parts[-2]
+                            show_end = -2
+                        show = '.'.join(parts[:show_end])
+                    else:
+                        show = parts[0]
+
                     with Image.open(img_path) as orig_img:
-                        img = ImageOps.fit(orig_img, self.out.resolution)
-                        if self.text:
-                            img = self.info.write(img, img_path.name)
-                        self.show_img(img)
+                        img = orig_img.convert(image_mode)
+
+                    if method == 'pad':
+                        img = ImageOps.pad(img, self.out.resolution, color=(255, 255, 255, 0))
+                    elif method == 'fit':
+                        img = ImageOps.fit(img, self.out.resolution)
+                    else:
+                        raise RuntimeError(f'Unknown method {method}')
+
+                    # TODO
+                    # if self.text:
+                    #     img = self.info.write(img, img_path.name)
+                    self.show_img(img)
                     success = True
-                except:
+                except Exception:
                     traceback.print_exc()
                     img_paths.remove(img_path)
             interval = log.pop_time()

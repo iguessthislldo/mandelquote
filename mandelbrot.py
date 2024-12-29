@@ -2,17 +2,19 @@
 
 import sys
 import os
-from time import sleep
-from argparse import ArgumentParser
 import random
 import math
-from time import time
 import traceback
-import concurrent.futures as futures
 import colorsys
 import textwrap
 import array
+import dataclasses
+from time import sleep
+from argparse import ArgumentParser
+from time import time
+import concurrent.futures as futures
 from pathlib import Path
+from typing import Annotated
 
 from PIL import Image, ImageOps, ImageDraw, ImageShow, ImageFont
 
@@ -82,6 +84,130 @@ class Log:
 
 class EdgeError(Exception):
     pass
+
+
+class ArgInfo:
+    def __init__(self, *names, opt=False, flag=False, **kw):
+        self.names = names
+        self.opt = opt or flag
+        self.flag = flag
+        self.kw = kw
+
+    def add(self, arg_parser, field):
+        Type = field.type.__origin__
+        has_default = field.default != dataclasses.MISSING
+        default = field.default if has_default else None
+        kw = self.kw.copy()
+        no_prefix = False
+        if Type is bool:
+            if not isinstance(default, bool):
+                raise ValueError(f'Bool field {field.name!r} is missing bool default')
+
+            if default:
+                no_prefix = True
+                kw['action'] = 'store_false'
+            else:
+                kw['action'] = 'store_true'
+        else:
+            kw.setdefault('type', Type)
+            kw.setdefault('default', default)
+
+        names = self.names
+        if not names:
+            names = [field.name.replace('_', '-')]
+        if self.opt:
+            opt_names = []
+            for name in names:
+                prefix = '-'
+                if len(name) > 1:
+                    prefix += '-'
+                    if no_prefix:
+                        prefix += 'no-'
+                opt_names.append(prefix + name)
+            names = opt_names
+            kw['dest'] = field.name
+        else:
+            if len(names) > 1:
+                raise ValueError(f'Positional arg {field.name!r} has multiple names')
+            name = names[0]
+            kw.setdefault('metavar', f'<{name}>')
+            if has_default:
+                kw.setdefault('nargs', '?')
+
+        if not self.flag:
+            default_text = None
+            if 'default_text' in kw:
+                default_text = kw['default_text']
+            elif default is not None:
+                default_text = f'default is {default_text}'
+            if default_text is not None:
+                help_text = kw.get('help', '')
+                if help_text:
+                    help_text += f' ({default_text})'
+                else:
+                    help_text = default_text
+                kw['help'] = help_text
+
+        arg_parser.add_argument(*names, **kw)
+
+
+def Arg(Type, *other_names, **kw):
+    return Annotated[Type, ArgInfo(*other_names, **kw)]
+
+
+def Opt(Type, *other_names, **kw):
+    return Annotated[Type, ArgInfo(*other_names, opt=True, **kw)]
+
+
+def Flag(*other_names, **kw):
+    return Annotated[bool, ArgInfo(*other_names, flag=True, **kw)]
+
+
+def add_dataclass_args(arg_parser, DataclassType):
+    for field in dataclasses.fields(DataclassType):
+        field.type.__metadata__[0].add(arg_parser, field)
+
+
+def get_dataclass_from_args(args, DataclassType):
+    fields = [f.name for f in dataclasses.fields(DataclassType)]
+    return DataclassType(**{k: v for k, v in vars(args).items() if k in fields})
+
+
+def parse_args_to_dataclass(DataclassType, **kw):
+    arg_parser = ArgumentParser(**kw)
+    add_dataclass_args(arg_parser, DataclassType)
+    args = arg_parser.parse_args()
+    return get_dataclass_from_args(args, DataclassType)
+
+
+def size(value):
+    try:
+        if 'x' in value:
+            return [int(n) for n in value.split('x')]
+        else:
+            return int(s)
+    except Exception:
+        raise ValueError(f'{value!r} is not a valid size')
+
+
+@dataclasses.dataclass
+class Config:
+    size: Opt(size, help='Resolution of output frames')
+    skip_size: Opt(size, help='Resolution of skip frames')
+    count: Opt(int, help='Number of output frames in a sequence') = 15
+    skip: Opt(int, help='Number of skip frames before ouput frames') = None
+    min_interval: Opt(int, help='Time between frames') = None
+    seed: Opt(int, help='RNG seed') = None
+    text: Flag(help='Disable quotes and other text') = True
+    workers: Opt(int, help='Worker count') = None
+    p: Opt(int, help='Exponent') = 2
+    smooth: Flag(help='Disable smoothing colors between bands') = True
+    sat: Flag(help='Disable special saturation') = True
+    dynamic_color: Flag(help='Disable per-frame color range') = True
+    force_python_impl: Flag(help='Force Python Impl.') = False
+    inky: Flag(help='Use Inky ouput') = False
+    loop: Flag(help='Generate multiple sequences') = False
+    data: Opt(Path, help='Asset data directory') = Path(__file__).parent
 
 
 image_mode = 'RGBA'
@@ -363,41 +489,21 @@ class InfoWriter(TextWriter):
 
 
 class Sequence:
-    def __init__(self, data_path, resolution, skip_resolution, out, count, skip, min_interval,
-            seed, text, workers, p, smooth, sat, dynamic_color):
-        self.data_path = data_path
-        self.resolution = resolution
-        self.skip_resolution = skip_resolution
-        self.count = skip + count
-        self.skip = skip
-        self.min_interval = min_interval
-        self.seed = random.randrange(sys.maxsize) if seed is None else seed
-        self.text = text
-        self.workers = workers
-        self.p = p
-        self.smooth = smooth
-        self.sat = sat
-        self.dynamic_color = dynamic_color
-        self.img_dir = data_path / 'img'
+    def __init__(self, config, out):
+        self.config = config
+        self.rng = random.Random(config.seed)
+        self.count = config.skip + config.count
+        self.img_dir = config.data / 'img'
 
         self.out = out
-        width = resolution[0]
-        if text:
-            self.quotes = QuoteWriter(data_path, width)
-            self.info = InfoWriter(data_path, width)
-
-    @property
-    def seed(self):
-        return self._seed
-
-    @seed.setter
-    def seed(self, value):
-        self._seed = value
-        self.rng = random.Random(self._seed)
+        width = config.size[0]
+        if config.text:
+            self.quotes = QuoteWriter(config.data, width)
+            self.info = InfoWriter(config.data, width)
 
     def sleep_min(self, log, interval):
-        if interval < self.min_interval:
-            sleep_for = self.min_interval - interval
+        if interval < self.config.min_interval:
+            sleep_for = self.config.min_interval - interval
             log.print('Sleeping for', sleep_for, 's')
             sleep(sleep_for)
 
@@ -406,11 +512,12 @@ class Sequence:
         self.out.show()
 
     def _generate_and_show(self, log):
-        mandelbrot = Mandelbrot(self.workers, self.p, self.smooth, self.sat, self.dynamic_color)
-        skip_res = list(self.skip_resolution)
+        c = self.config
+        mandelbrot = Mandelbrot(c.workers, c.p, c.smooth, c.sat, c.dynamic_color)
+        skip_res = list(c.skip_size)
         for i in range(0, self.count):
             n = i + 1
-            get_img = n > self.skip
+            get_img = n > c.skip
             log.print(f'{n}/{self.count} get_img: {get_img}', mandelbrot.window)
             log.push_time('generate and show')
             log.push_level()
@@ -419,7 +526,7 @@ class Sequence:
             last = i == self.count - 1
             edges = None if last else []
             while True:
-                res = self.resolution if get_img else skip_res
+                res = c.size if get_img else skip_res
                 log.print(res)
                 log.push_level()
                 try:
@@ -437,9 +544,9 @@ class Sequence:
 
             if img and get_img:
                 log.push_time('show')
-                if self.text:
+                if c.text:
                     img = self.quotes.write(img, self.rng)
-                    img = self.info.write(img, f'p={self.p}')
+                    img = self.info.write(img, f'p={self.config.p}')
                 self.show_img(img)
                 log.pop_time()
 
@@ -510,38 +617,17 @@ class Sequence:
             self.show_image_file(log)
 
 
-def parse_size(s):
-    return [int(n) for n in s.split('x')]
-
-
 if __name__ == '__main__':
-    arg_parser = ArgumentParser()
-    arg_parser.add_argument('--size', type=parse_size)
-    arg_parser.add_argument('--skip-size', type=parse_size)
-    arg_parser.add_argument('--count', '-c', type=int, default=15)
-    arg_parser.add_argument('--skip', '-s', type=int)
-    arg_parser.add_argument('--min-interval', '-i', type=int)
-    arg_parser.add_argument('--seed', type=int)
-    arg_parser.add_argument('--no-text', action='store_false', dest='text')
-    arg_parser.add_argument('--workers', '-j', type=int, default=None)
-    arg_parser.add_argument('-p', type=int, default=2)
-    arg_parser.add_argument('--no-smooth', action='store_false', dest='smooth')
-    arg_parser.add_argument('--no-sat', action='store_false', dest='sat')
-    arg_parser.add_argument('--no-dynamic-color', action='store_false', dest='dynamic_color')
-    arg_parser.add_argument('--force-python-impl', action='store_true')
-    arg_parser.add_argument('--inky', action='store_true')
-    arg_parser.add_argument('--loop', action='store_true', default=False)
-    arg_parser.add_argument('--data', type=Path, default=Path(__file__).parent)
-    args = arg_parser.parse_args()
+    config = parse_args_to_dataclass(Config)
 
-    if args.force_python_impl:
+    if config.force_python_impl:
         use_mandelbrot_native_impl = False
 
-    if args.inky:
+    if config.inky:
         from inky.auto import auto as Inky
 
         out = Inky(ask_user=True, verbose=True)
-        skip_default = 3
+        skip_default = 2
         min_interval_default = 60 * 10
 
         try:
@@ -552,21 +638,28 @@ if __name__ == '__main__':
         out = FileOutput()
         skip_default = 0
         min_interval_default = 0
-    resolution = args.size or out.resolution
+
+    if config.size is None:
+        config.size = out.resolution
+
     min_skip_res = (50, 30)
-    skip_resolution = args.skip_size or \
-        [max(min_skip_res[i], n // 10) for i, n in enumerate(resolution)]
+    if config.skip_size is None:
+        config.skip_size = [max(min_skip_res[i], n // 4) for i, n in enumerate(config.size)]
 
-    skip = skip_default if args.skip is None else args.skip
-    min_interval = min_interval_default if args.min_interval is None else args.min_interval
-    seq = Sequence(args.data, resolution, skip_resolution, out, args.count, skip, min_interval,
-        args.seed, args.text, args.workers, args.p, args.smooth, args.sat, args.dynamic_color)
+    if config.skip is None:
+        config.skip = skip_default
 
-    print(f'{seq.resolution[0]}x{seq.resolution[1]}')
-    print(f'seed: {seq.seed}')
+    if config.min_interval is None:
+        config.min_interval = min_interval_default
+
+    if config.seed is None:
+        config.seed = random.randrange(sys.maxsize)
+
+    print(f'{config.size[0]}x{config.size[1]}')
+    print(f'seed: {config.seed}')
     if use_mandelbrot_native_impl:
         print('Using Native Implementation')
     else:
         print('Using Python Implementation')
 
-    seq.generate_and_show(args.loop)
+    Sequence(config, out).generate_and_show(config.loop)
